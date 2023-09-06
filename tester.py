@@ -41,11 +41,11 @@ def send_control_messages(dev):
         time.sleep(1)
 
 def send_control_messages_with_text(dev, text):
-        print(text.encode())
+        print("Send message: " + text)
         dev.ctrl_transfer(0x40, 0x5b, 0, 0, text.encode())
         time.sleep(1)
         w = dev.ctrl_transfer(0xc0, 0x5c, 0, 0, 64)        
-        print(bytes(w).decode('utf-8'))
+        print("Received message: " + bytes(w).decode('utf-8'))
 
 def send_bulk_messages(dev):
     data_to_send = [0, 1]  # A list containing 0 and 1
@@ -56,10 +56,15 @@ def send_bulk_messages(dev):
         ep0.write([data], timeout=1000)
         time.sleep(1)
 
+    data_str = "tekst"
+    print("Send data: " + data_str)
+    ep0.write(data_str, timeout=1000)
+
     ep1.clear_halt()
     w = ep1.read(64, 1000)
-    print(w)
-    print(bytes(w).decode('utf-8'))
+    # print(w)
+
+    print("Received data: " + bytes(w).decode('utf-8'))
 
 if __name__ == "__main__":
     main()

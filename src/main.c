@@ -84,8 +84,8 @@ static void bulk_ep_out_cb(uint8_t ep,
 
     LOG_INF("Received value: %d ", usb_static_buffer[0]);
 
-    int result =
-        usb_write(ep, usb_static_buffer, sizeof(usb_static_buffer), NULL);
+    // int result =
+    //     usb_write(0x81, usb_static_buffer, sizeof(usb_static_buffer), NULL);
 
     set_led_state(usb_static_buffer[0]);
 }
