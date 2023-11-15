@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <zephyr/device.h>
+#include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
@@ -26,8 +28,18 @@ LOG_MODULE_REGISTER(main);
 #define BULK_OUT_EP_IDX 0
 #define BULK_IN_EP_IDX 1
 
+#define USB_READ_FLAG 0x5b
+#define USB_WRITE_FLAG 0x5c
+#define I2C_FIND_DEVICE 0x5d
+#define I2C_READ_BYTE 0x5e
+
+#define LIS2DH_ADDR 0x76
+#define LIS2DH_REG_WAI 0xD0
+
 static uint8_t usb_static_buffer[64] = {0};
 // BUILD_ASSERT(sizeof(usb_static_buffer) == CONFIG_USB_REQUEST_BUFFER_SIZE);
+static struct device *i2c_dev;
+uint8_t who_am_i;
 
 struct usb_config {
     struct usb_if_descriptor if0;
@@ -73,6 +85,23 @@ struct usb_config my_usb_config = {
             .bInterval = 0x00,
         },
 };
+
+static uint8_t is_i2c_ready() {
+    if (i2c_dev == NULL) {
+        /* No such node, or the node does not have status "okay". */
+        LOG_INF("Error: no i2c device founding.\n");
+        return NULL;
+    }
+
+    if (!device_is_ready(i2c_dev)) {
+        LOG_INF(
+            "Error: Device \"%s\" is not ready; "
+            "check the driver initialization logs for errors.\n",
+            i2c_dev->name);
+        return NULL;
+    }
+    return 1;
+}
 
 static void bulk_ep_out_cb(uint8_t ep,
                            enum usb_dc_ep_cb_status_code ep_status) {
@@ -156,7 +185,7 @@ static int usb_vendor_handler(struct usb_setup_packet *setup, int32_t *len,
         return -ENOTSUP;
     }
 
-    if (usb_reqtype_is_to_device(setup) && setup->bRequest == 0x5b) {
+    if (usb_reqtype_is_to_device(setup) && setup->bRequest == USB_READ_FLAG) {
         LOG_INF("Host-to-Device, data: %p wValue: %d", (void *)*data,
                 setup->wValue);
         LOG_INF("Receive message: %s", *data);
@@ -171,12 +200,46 @@ static int usb_vendor_handler(struct usb_setup_packet *setup, int32_t *len,
         return 0;
     }
 
-    if ((usb_reqtype_is_to_host(setup)) && (setup->bRequest == 0x5c)) {
+    if ((usb_reqtype_is_to_host(setup)) &&
+        (setup->bRequest == USB_WRITE_FLAG)) {
         LOG_INF("Device-to-Host, wValue %d, data %p", setup->wValue,
                 (void *)*data);
         LOG_INF("Sending message: %s", usb_static_buffer);
         *data = usb_static_buffer;
         *len = MIN(sizeof(usb_static_buffer), setup->wLength);
+        return 0;
+    }
+
+    if ((usb_reqtype_is_to_device(setup)) &&
+        (setup->bRequest == I2C_FIND_DEVICE)) {
+        LOG_INF("Device-to-Host, wValue %d, data %p", setup->wValue,
+                (void *)*data);
+        i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
+
+        if (!is_i2c_ready()) {
+            LOG_ERR("Error: no i2c device found.\n");
+            return NULL;
+        }
+
+        LOG_INF("Found device \"%s\", ready tu use\n", i2c_dev->name);
+
+        return 0;
+    }
+    // tu trzeba dodać jakieś czytelne parsowanie tego co przychodzi z linuxa
+    if ((usb_reqtype_is_to_device(setup)) &&
+        (setup->bRequest == I2C_READ_BYTE)) {
+        if (!is_i2c_ready()) {
+            LOG_ERR("Error: no i2c device found.\n");
+            return NULL;
+        }
+
+        int ret =
+            i2c_reg_read_byte(i2c_dev, LIS2DH_ADDR, LIS2DH_REG_WAI, &who_am_i);
+        if (ret) {
+            LOG_INF("Unable get WAI data. (err %i)\n", ret);
+            return NULL;
+        }
+
         return 0;
     }
 

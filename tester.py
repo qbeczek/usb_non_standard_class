@@ -2,11 +2,15 @@ import usb
 import time
 import argparse
 
+
 def main():
     parser = argparse.ArgumentParser(description="USB communication script")
-    parser.add_argument("-ctrl", "--control_msg", action="store_true", help="Send control messages")
-    parser.add_argument("-blk", "--bulk_msg", action="store_true", help="Send bulk messages")
-    parser.add_argument("-text", "--text_msg", type=str, help="Text to send in control messages")
+    parser.add_argument("-ctrl", "--control_msg",
+                        action="store_true", help="Send control messages")
+    parser.add_argument("-blk", "--bulk_msg",
+                        action="store_true", help="Send bulk messages")
+    parser.add_argument("-text", "--text_msg", type=str,
+                        help="Text to send in control messages")
     args = parser.parse_args()
 
     if not args.control_msg and not args.bulk_msg and not args.text_msg:
@@ -30,8 +34,9 @@ def main():
         send_bulk_messages(dev)
     if args.text_msg:
         send_control_messages_with_text(dev, args.text_msg)
-    
+
     dev.reset()
+
 
 def send_control_messages(dev):
     for _ in range(3):
@@ -40,18 +45,20 @@ def send_control_messages(dev):
         dev.ctrl_transfer(0x40, 0x5b, 0, 0, 0)
         time.sleep(1)
 
+
 def send_control_messages_with_text(dev, text):
-        print("Send message: " + text)
-        dev.ctrl_transfer(0x40, 0x5b, 0, 0, text.encode())
-        time.sleep(1)
-        w = dev.ctrl_transfer(0xc0, 0x5c, 0, 0, 64)        
-        print("Received message: " + bytes(w).decode('utf-8'))
+    print("Send message: " + text)
+    dev.ctrl_transfer(0x40, 0x5b, 0, 0, text.encode())
+    time.sleep(1)
+    w = dev.ctrl_transfer(0xc0, 0x5c, 0, 0, 64)
+    print("Received message: " + bytes(w).decode('utf-8'))
+
 
 def send_bulk_messages(dev):
     data_to_send = [0, 1]  # A list containing 0 and 1
-    ep0 = dev[0][(0,0)][0]
-    ep1 = dev[0][(0,0)][1]
-    
+    ep0 = dev[0][(0, 0)][0]
+    ep1 = dev[0][(0, 0)][1]
+
     for data in data_to_send:
         ep0.write([data], timeout=1000)
         time.sleep(1)
@@ -65,6 +72,7 @@ def send_bulk_messages(dev):
     # print(w)
 
     print("Received data: " + bytes(w).decode('utf-8'))
+
 
 if __name__ == "__main__":
     main()
