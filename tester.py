@@ -55,7 +55,7 @@ def send_control_messages_with_text(dev, text):
 
 
 def send_bulk_messages(dev):
-    data_to_send = [0, 1]  # A list containing 0 and 1
+    data_to_send = [0x5d, 0x5e]  # A list containing 0 and 1
     ep0 = dev[0][(0, 0)][0]
     ep1 = dev[0][(0, 0)][1]
 

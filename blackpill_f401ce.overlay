@@ -1,0 +1,23 @@
+/*
+ * Copyright (c) 2020, Nordic Semiconductor ASA
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * Example configuration of a BME280 device on a blackpill_f401ce I2C bus.
+ *
+ * Device address 0x77 is assumed. Your device may have a different
+ * address; check your device documentation if unsure.
+ */
+&i2c1 {
+	status = "okay";
+
+	sensor@0 {
+		compatible = "generic,sensor";
+		reg = <0x00>;
+		label = "GENERIC_SENSOR_0";
+	};
+};
+
+

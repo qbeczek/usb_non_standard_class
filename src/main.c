@@ -18,9 +18,8 @@
 #include <zephyr/usb/usb_device.h>
 #include <zephyr/usb/usbd.h>
 
+#include "bme280.h"
 #include "led.h"
-
-LOG_MODULE_REGISTER(main);
 
 #define BULK_OUT_EP_ADDR 0x01
 #define BULK_IN_EP_ADDR 0x81
@@ -33,13 +32,12 @@ LOG_MODULE_REGISTER(main);
 #define I2C_FIND_DEVICE 0x5d
 #define I2C_READ_BYTE 0x5e
 
-#define LIS2DH_ADDR 0x76
-#define LIS2DH_REG_WAI 0xD0
+LOG_MODULE_REGISTER(main);
 
 static uint8_t usb_static_buffer[64] = {0};
 // BUILD_ASSERT(sizeof(usb_static_buffer) == CONFIG_USB_REQUEST_BUFFER_SIZE);
-static struct device *i2c_dev;
 uint8_t who_am_i;
+const struct device *i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
 
 struct usb_config {
     struct usb_if_descriptor if0;
@@ -100,6 +98,7 @@ static uint8_t is_i2c_ready() {
             i2c_dev->name);
         return NULL;
     }
+    LOG_INF("Device is ready\n");
     return 1;
 }
 
@@ -214,7 +213,7 @@ static int usb_vendor_handler(struct usb_setup_packet *setup, int32_t *len,
         (setup->bRequest == I2C_FIND_DEVICE)) {
         LOG_INF("Device-to-Host, wValue %d, data %p", setup->wValue,
                 (void *)*data);
-        i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
+        // i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
 
         if (!is_i2c_ready()) {
             LOG_ERR("Error: no i2c device found.\n");
@@ -228,18 +227,24 @@ static int usb_vendor_handler(struct usb_setup_packet *setup, int32_t *len,
     // tu trzeba dodać jakieś czytelne parsowanie tego co przychodzi z linuxa
     if ((usb_reqtype_is_to_device(setup)) &&
         (setup->bRequest == I2C_READ_BYTE)) {
-        if (!is_i2c_ready()) {
-            LOG_ERR("Error: no i2c device found.\n");
-            return NULL;
-        }
+        // i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
 
-        int ret =
-            i2c_reg_read_byte(i2c_dev, LIS2DH_ADDR, LIS2DH_REG_WAI, &who_am_i);
-        if (ret) {
-            LOG_INF("Unable get WAI data. (err %i)\n", ret);
-            return NULL;
-        }
+        // if (!is_i2c_ready()) {
+        //     LOG_ERR("Error: no i2c device found.\n");
+        //     return NULL;
+        // }
 
+        // int ret = i2c_reg_read_byte(i2c_dev, BMP280_I2C_ADDRESS,
+        // BMP280_REG_CHIPID,
+        //                             &who_am_i);
+        // if (ret != 0) {
+        //     printk("Failed to read chip ID: %d\n", ret);
+        //     return 0;
+        // }
+
+        const struct device *i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
+
+        read_temperature_from_bmp280(i2c_dev);
         return 0;
     }
 
@@ -286,5 +291,31 @@ int main(void) {
         return 0;
     }
 
+    const struct device *i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
+
+    if (!i2c_dev) {
+        printk("Cannot get I2C device\n");
+        return 0;
+    }
+
+    printk("I2C device found\n");
+
+    // Sprawdź identyfikator chipu
+    uint8_t chip_id;
+    ret = i2c_reg_read_byte(i2c_dev, BMP280_I2C_ADDRESS, BMP280_REG_CHIPID,
+                            &chip_id);
+    if (ret != 0) {
+        printk("Failed to read chip ID: %d\n", ret);
+        return 0;
+    }
+
+    if (chip_id != BMP280_CHIPID) {
+        printk("Invalid chip ID: 0x%x\n", chip_id);
+        return 0;
+    }
+
+    read_temperature_from_bmp280(i2c_dev);
+
+    printk("End\n");
     return 0;
 }
