@@ -29,15 +29,23 @@
 
 #define USB_READ_FLAG 0x5b
 #define USB_WRITE_FLAG 0x5c
-#define I2C_FIND_DEVICE 0x5d
-#define I2C_READ_BYTE 0x5e
 
 LOG_MODULE_REGISTER(main);
+struct i2c_command {
+    uint8_t operation;    // Typ operacji: odczyt/zapis
+    uint8_t device_addr;  // Adres urządzenia I2C
+    uint8_t reg_addr;     // Adres rejestru (jeśli dotyczy)
+    uint8_t data_length;  // Długość danych
+    uint8_t data[64];     // Dane do wysłania/odebrania
+};
+
+static struct k_work i2c_work;
+static struct i2c_command i2c_cmd;
 
 static uint8_t usb_static_buffer[64] = {0};
-// BUILD_ASSERT(sizeof(usb_static_buffer) == CONFIG_USB_REQUEST_BUFFER_SIZE);
+
 uint8_t who_am_i;
-const struct device *i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
+const struct device *gdev = 0;
 
 struct usb_config {
     struct usb_if_descriptor if0;
@@ -83,8 +91,8 @@ struct usb_config my_usb_config = {
             .bInterval = 0x00,
         },
 };
-
 static uint8_t is_i2c_ready() {
+    const struct device *i2c_dev = gdev;
     if (i2c_dev == NULL) {
         /* No such node, or the node does not have status "okay". */
         LOG_INF("Error: no i2c device founding.\n");
@@ -102,20 +110,68 @@ static uint8_t is_i2c_ready() {
     return 1;
 }
 
+void i2c_work_handler(struct k_work *work) {
+    int ret;
+    uint8_t tmp;
+    printk("i2c_work start\n");
+
+    if (i2c_cmd.operation == 0) {  // Zapis
+        ret = i2c_burst_write(gdev, i2c_cmd.device_addr, i2c_cmd.reg_addr,
+                              i2c_cmd.data, i2c_cmd.data_length);
+        if (ret != 0) {
+            printk("Failed to write I2C message: %d\n", ret);
+        } else {
+            printk("I2C message sent successfully.\n");
+        }
+    } else if (i2c_cmd.operation == 1) {  // Odczyt
+        ret = i2c_reg_read_byte(gdev, i2c_cmd.device_addr, i2c_cmd.reg_addr,
+                                &tmp);
+        i2c_cmd.data[0] = tmp;
+        if (ret != 0) {
+            printk("Failed to read I2C message: %d\n", ret);
+        } else {
+            printk("I2C message read successfully. Read: %x\n", tmp);
+
+            // Przesyłanie danych z powrotem do hosta USB
+            uint8_t ep = 0x81;  // Wartość może być dostosowana zgodnie z Twoimi
+                                // wymaganiami
+            int result = usb_write(ep, i2c_cmd.data, 1, NULL);
+            if (result == 0) {
+                printk("USB message sent successfully. Data: %x\n", tmp);
+            } else {
+                printk("USB write failed with error code %d.\n", result);
+            }
+        }
+    }
+    printk("i2c_work end\n");
+}
+
 static void bulk_ep_out_cb(uint8_t ep,
                            enum usb_dc_ep_cb_status_code ep_status) {
     uint32_t bytes_to_read;
 
+    // Odczytaj ilość bajtów do odczytu
     usb_read(ep, NULL, 0, &bytes_to_read);
     LOG_INF("ep 0x%x, bytes to read %d ", ep, bytes_to_read);
-    usb_read(ep, usb_static_buffer, bytes_to_read, NULL);
 
-    LOG_INF("Received value: %d ", usb_static_buffer[0]);
+    // Upewnij się, że ilość bajtów nie przekracza rozmiaru struktury
+    // i2c_command
+    if (bytes_to_read > sizeof(struct i2c_command)) {
+        LOG_ERR("Received data exceeds buffer size.");
+        return;
+    }
 
-    // int result =
-    //     usb_write(0x81, usb_static_buffer, sizeof(usb_static_buffer), NULL);
+    // Odczytaj dane z bufora USB do struktury i2c_command
+    usb_read(ep, (uint8_t *)&i2c_cmd, bytes_to_read, NULL);
 
-    set_led_state(usb_static_buffer[0]);
+    LOG_INF(
+        "Received I2C command: operation=%d, addr=0x%x, reg=0x%x, length=%d",
+        i2c_cmd.operation, i2c_cmd.device_addr, i2c_cmd.reg_addr,
+        i2c_cmd.data_length);
+    printk("Enable ep %x\n", ep);
+    usb_dc_ep_enable(ep);
+    // Przekazanie danych do workqueue
+    k_work_submit(&i2c_work);
 }
 
 static void bulk_ep_in_cb(uint8_t ep, enum usb_dc_ep_cb_status_code ep_status) {
@@ -123,12 +179,12 @@ static void bulk_ep_in_cb(uint8_t ep, enum usb_dc_ep_cb_status_code ep_status) {
     LOG_WRN("usb_dc_ep_is_stalled - return: %d, stalled: %d",
             usb_dc_ep_is_stalled(ep, &stalled), stalled);
 
-    int result =
-        usb_write(ep, usb_static_buffer, sizeof(usb_static_buffer), NULL);
+    // Przesyłanie danych z powrotem do hosta USB
+    int result = usb_write(ep, i2c_cmd.data, i2c_cmd.data_length, NULL);
 
     if (result == 0) {
         LOG_INF("ep 0x%x", ep);
-        LOG_INF("Sending value: %d ", usb_static_buffer[0]);
+        LOG_INF("Sending value: %d ", i2c_cmd.data[0]);
     } else {
         printk("USB write failed with error code %d.\n", result);
     }
@@ -180,6 +236,7 @@ static int usb_vendor_handler(struct usb_setup_packet *setup, int32_t *len,
     LOG_INF("Class request: bRequest 0x%x bmRequestType 0x%x len %d",
             setup->bRequest, setup->bmRequestType, *len);
 
+    const struct device *i2c_dev = gdev;
     if (setup->RequestType.recipient != USB_REQTYPE_RECIPIENT_DEVICE) {
         return -ENOTSUP;
     }
@@ -206,45 +263,6 @@ static int usb_vendor_handler(struct usb_setup_packet *setup, int32_t *len,
         LOG_INF("Sending message: %s", usb_static_buffer);
         *data = usb_static_buffer;
         *len = MIN(sizeof(usb_static_buffer), setup->wLength);
-        return 0;
-    }
-
-    if ((usb_reqtype_is_to_device(setup)) &&
-        (setup->bRequest == I2C_FIND_DEVICE)) {
-        LOG_INF("Device-to-Host, wValue %d, data %p", setup->wValue,
-                (void *)*data);
-        // i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
-
-        if (!is_i2c_ready()) {
-            LOG_ERR("Error: no i2c device found.\n");
-            return NULL;
-        }
-
-        LOG_INF("Found device \"%s\", ready tu use\n", i2c_dev->name);
-
-        return 0;
-    }
-    // tu trzeba dodać jakieś czytelne parsowanie tego co przychodzi z linuxa
-    if ((usb_reqtype_is_to_device(setup)) &&
-        (setup->bRequest == I2C_READ_BYTE)) {
-        // i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
-
-        // if (!is_i2c_ready()) {
-        //     LOG_ERR("Error: no i2c device found.\n");
-        //     return NULL;
-        // }
-
-        // int ret = i2c_reg_read_byte(i2c_dev, BMP280_I2C_ADDRESS,
-        // BMP280_REG_CHIPID,
-        //                             &who_am_i);
-        // if (ret != 0) {
-        //     printk("Failed to read chip ID: %d\n", ret);
-        //     return 0;
-        // }
-
-        const struct device *i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
-
-        read_temperature_from_bmp280(i2c_dev);
         return 0;
     }
 
@@ -277,6 +295,8 @@ USBD_DEFINE_CFG_DATA(my_usb_config_data) = {
 /* usb.rst device config data end */
 
 int main(void) {
+    k_work_init(&i2c_work, i2c_work_handler);
+
     int ret;
 
     ret = usb_enable(NULL);
@@ -291,30 +311,28 @@ int main(void) {
         return 0;
     }
 
-    const struct device *i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
+    gdev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
 
-    if (!i2c_dev) {
+    if (!gdev) {
         printk("Cannot get I2C device\n");
         return 0;
     }
 
-    printk("I2C device found\n");
-
     // Sprawdź identyfikator chipu
-    uint8_t chip_id;
-    ret = i2c_reg_read_byte(i2c_dev, BMP280_I2C_ADDRESS, BMP280_REG_CHIPID,
-                            &chip_id);
-    if (ret != 0) {
-        printk("Failed to read chip ID: %d\n", ret);
-        return 0;
-    }
+    // uint8_t chip_id;
+    // ret = i2c_reg_read_byte(gdev, BMP280_I2C_ADDRESS, BMP280_REG_CHIPID,
+    //                         &chip_id);
+    // if (ret != 0) {
+    //     printk("Failed to read chip ID: %d\n", ret);
+    //     return 0;
+    // }
 
-    if (chip_id != BMP280_CHIPID) {
-        printk("Invalid chip ID: 0x%x\n", chip_id);
-        return 0;
-    }
-
-    read_temperature_from_bmp280(i2c_dev);
+    // if (chip_id != BMP280_CHIPID) {
+    //     printk("Invalid chip ID: 0x%x\n", chip_id);
+    //     return 0;
+    // }
+    // printk("I2C device found - chip ID: 0x%x\n", chip_id);
+    // read_temperature_from_bmp280(gdev);
 
     printk("End\n");
     return 0;
